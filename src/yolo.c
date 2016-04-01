@@ -5,6 +5,10 @@
 #include "parser.h"
 #include "box.h"
 
+#include <dirent.h>
+#include <stdlib.h>
+//#include <boost/filesystem.hpp>
+
 #ifdef OPENCV
 #include "opencv2/highgui/highgui_c.h"
 #endif
@@ -127,6 +131,27 @@ void print_yolo_detections(FILE **fps, char *id, box *boxes, float **probs, int 
 
         for(j = 0; j < classes; ++j){
             if (probs[i][j]) fprintf(fps[j], "%s %f %f %f %f %f\n", id, probs[i][j],
+                    xmin, ymin, xmax, ymax);
+        }
+    }
+}
+
+void print_yolo_result(char *fpath, char *id, box *boxes, float **probs, int total, int classes, int w, int h)
+{
+    int i, j;
+    for(i = 0; i < total; ++i){
+        float xmin = boxes[i].x - boxes[i].w/2.;
+        float xmax = boxes[i].x + boxes[i].w/2.;
+        float ymin = boxes[i].y - boxes[i].h/2.;
+        float ymax = boxes[i].y + boxes[i].h/2.;
+
+        if (xmin < 0) xmin = 0;
+        if (ymin < 0) ymin = 0;
+        if (xmax > w) xmax = w;
+        if (ymax > h) ymax = h;
+
+        for(j = 0; j < classes; ++j){
+            if (probs[i][j]) fprintf("%s %f %f %f %f %f\n", id, probs[i][j],
                     xmin, ymin, xmax, ymax);
         }
     }
@@ -397,6 +422,122 @@ void demo_swag(char *cfgfile, char *weightfile, float thresh){}
 
 void demo_yolo(char *cfgfile, char *weightfile, float thresh, int cam_index, char *filename);
 
+void sleepcp(int milliseconds) // cross-platform sleep function
+{
+    clock_t time_end;
+    time_end = clock() + milliseconds * CLOCKS_PER_SEC/1000;
+    while (clock() < time_end)
+    {
+    }
+}
+
+void launch_detector_yolo(char *cfgfile, char *weightfile, char *inputpath, char *outpath, float thresh)
+{
+    network net = parse_network_cfg(cfgfile);
+    if(weightfile){
+        load_weights(&net, weightfile);
+    }
+    set_batch_network(&net, 1);
+    while(1) {
+      DIR *dp;
+      struct dirent *dirp;
+      if((dp  = opendir(inputpath)) == NULL) {
+          printf("Error opening dir!");        
+      }
+
+      while ((dirp = readdir(dp)) != NULL) {
+	if (strlen(dirp->d_name)>2) {                   
+          char buff[256];
+	  char *fname = buff;
+	  strcpy(fname, inputpath);
+          strcat(fname, dirp->d_name);
+          printf("Processing file: %s\n", fname);
+          detect_yolo(net, fname, outpath, thresh);
+          }
+      }      
+      
+      //All files are processed - sleep
+      printf("Waiting for more files...\n");
+      closedir(dp);      
+      sleepcp(3000);
+    }
+}
+
+void detect_yolo(network net, char *fpath, char *outpath, float thresh)
+{
+    thresh = 0.2;
+    detection_layer l = net.layers[net.n-1];
+    srand(2222222);     
+    clock_t time;
+    char buff[256];
+    char *input = buff;
+    int j;
+    float nms=.5;
+    box *boxes = calloc(l.side*l.side*l.n, sizeof(box));
+    float **probs = calloc(l.side*l.side*l.n, sizeof(float *));
+    for(j = 0; j < l.side*l.side*l.n; ++j) probs[j] = calloc(l.classes, sizeof(float *));
+    strncpy(input, fpath, 256);
+    
+    image im = load_image_color(input,0,0);
+    image sized = resize_image(im, net.w, net.h);
+    float *X = sized.data;
+    time=clock();
+    float *predictions = network_predict(net, X);
+    printf("%s: Predicted in %f seconds.\n", input, sec(clock()-time));
+    convert_yolo_detections(predictions, l.classes, l.n, l.sqrt, l.side, 1, 1, thresh, probs, boxes, 0);
+    if (nms) do_nms_sort(boxes, probs, l.side*l.side*l.n, l.classes, nms);
+    //draw_detections(im, l.side*l.side*l.n, thresh, boxes, probs, voc_names, 0, 20);
+    //show_image(im, "predictions");
+
+    //Save processed file!
+    //fname = get_fname(fpath)
+    //save_image(im, strcat(outpath, fname));
+    free_image(im);
+    free_image(sized);
+
+    //Save result data to text file!
+    //char buff[256];
+    //char *data = buff;
+    //strcpy(data, fpath);
+    write_detections(outpath, im, l.side*l.side*l.n, thresh, boxes, probs, voc_names, 0, 20);
+
+#ifdef OPENCV
+    cvWaitKey(0);
+    cvDestroyAllWindows();
+#endif    
+}
+
+//char *get_fname(char *fpath){
+//    boost::filesystem::path p(fpath);
+//    return p.filename()
+//}
+
+void write_detections(char *fname, image im, int num, float thresh, box *boxes, float **probs, char **names, image *labels, int classes)
+{
+    int i;
+
+    for(i = 0; i < num; ++i){
+        int class = max_index(probs[i], classes);
+        float prob = probs[i][class];
+        if(prob > thresh){            
+            printf("%s: %.2f\n", names[class], prob);            
+            box b = boxes[i];
+
+            int left  = (b.x-b.w/2.)*im.w;
+            int right = (b.x+b.w/2.)*im.w;
+            int top   = (b.y-b.h/2.)*im.h;
+            int bot   = (b.y+b.h/2.)*im.h;
+
+            if(left < 0) left = 0;
+            if(right > im.w-1) right = im.w-1;
+            if(top < 0) top = 0;
+            if(bot > im.h-1) bot = im.h-1;
+            
+            printf("/home/ar600/darknet/results.txt","%s;%s;%.2f;%d;%d;%d;%d\n;", names[class], prob, left, top, right, bot);
+        }
+    }
+}
+
 void run_yolo(int argc, char **argv)
 {
     int i;
@@ -416,7 +557,9 @@ void run_yolo(int argc, char **argv)
     char *cfg = argv[3];
     char *weights = (argc > 4) ? argv[4] : 0;
     char *filename = (argc > 5) ? argv[5]: 0;
+    char *outdir = (argc > 6) ? argv[6]: 0;
     if(0==strcmp(argv[2], "test")) test_yolo(cfg, weights, filename, thresh);
+    else if(0==strcmp(argv[2], "detection")) launch_detector_yolo(cfg, weights, filename, outdir, 0.2);
     else if(0==strcmp(argv[2], "train")) train_yolo(cfg, weights);
     else if(0==strcmp(argv[2], "valid")) validate_yolo(cfg, weights);
     else if(0==strcmp(argv[2], "recall")) validate_yolo_recall(cfg, weights);
