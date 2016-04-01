@@ -533,7 +533,7 @@ void write_detections(char *fname, image im, int num, float thresh, box *boxes, 
             if(top < 0) top = 0;
             if(bot > im.h-1) bot = im.h-1;
             
-            printf("/home/ar600/darknet/results.txt","%s;%s;%.2f;%d;%d;%d;%d\n;", names[class], prob, left, top, right, bot);
+            //printf("/home/ar600/darknet/results.txt","%s;%s;%.2f;%d;%d;%d;%d\n;", names[class], prob, left, top, right, bot);
         }
     }
 }
