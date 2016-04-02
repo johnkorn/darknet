@@ -447,12 +447,15 @@ void launch_detector_yolo(char *cfgfile, char *weightfile, char *inputpath, char
 
       while ((dirp = readdir(dp)) != NULL) {
 	if (strlen(dirp->d_name)>2) {                   
-          char buff[256];
-	  char *fname = buff;
-	  strcpy(fname, inputpath);
-          strcat(fname, dirp->d_name);
-          printf("Processing file: %s\n", fname);
-          detect_yolo(net, fname, outpath, thresh);
+          char buff1[256];
+	  char *fpath = buff1;
+          char buff2[256];
+	  char *fname = buff2;
+	  strcpy(fpath, inputpath);
+          strcpy(fname, dirp->d_name);
+          strcat(fpath, fname);
+          printf("Processing file: %s\n", fpath);
+          detect_yolo(net, fpath, fname, outpath, thresh);
           }
       }      
       
@@ -463,9 +466,9 @@ void launch_detector_yolo(char *cfgfile, char *weightfile, char *inputpath, char
     }
 }
 
-void detect_yolo(network net, char *fpath, char *outpath, float thresh)
+void detect_yolo(network net, char *fpath, char *fname, char *outpath, float thresh)
 {
-    thresh = 0.2;
+    thresh = .2f;
     detection_layer l = net.layers[net.n-1];
     srand(2222222);     
     clock_t time;
@@ -486,20 +489,19 @@ void detect_yolo(network net, char *fpath, char *outpath, float thresh)
     printf("%s: Predicted in %f seconds.\n", input, sec(clock()-time));
     convert_yolo_detections(predictions, l.classes, l.n, l.sqrt, l.side, 1, 1, thresh, probs, boxes, 0);
     if (nms) do_nms_sort(boxes, probs, l.side*l.side*l.n, l.classes, nms);
-    //draw_detections(im, l.side*l.side*l.n, thresh, boxes, probs, voc_names, 0, 20);
-    //show_image(im, "predictions");
+    
+    //Move processed file!
+    
+    char destpath[1024];
+    snprintf (destpath, sizeof(destpath), "%s%s", outpath, fname);
+    printf("Moving %s to %s\n", fpath, destpath);
+    rename (fpath, destpath);
 
-    //Save processed file!
-    //fname = get_fname(fpath)
-    //save_image(im, strcat(outpath, fname));
     free_image(im);
     free_image(sized);
 
     //Save result data to text file!
-    //char buff[256];
-    //char *data = buff;
-    //strcpy(data, fpath);
-    write_detections(outpath, im, l.side*l.side*l.n, thresh, boxes, probs, voc_names, 0, 20);
+    write_detections(fname, outpath, im, l.side*l.side*l.n, thresh, boxes, probs, voc_names, 0, 20);
 
 #ifdef OPENCV
     cvWaitKey(0);
@@ -512,15 +514,17 @@ void detect_yolo(network net, char *fpath, char *outpath, float thresh)
 //    return p.filename()
 //}
 
-void write_detections(char *fname, image im, int num, float thresh, box *boxes, float **probs, char **names, image *labels, int classes)
+void write_detections(char *fname, char *outdir, image im, int num, float thresh, box *boxes, float **probs, char **names, image *labels, int classes)
 {
     int i;
-
+    char fpath[1024];
+    snprintf(fpath, sizeof(fpath), "%s%s.detection.out", outdir, fname);
+    FILE * pFile;
+    pFile = fopen (fpath,"w");
     for(i = 0; i < num; ++i){
         int class = max_index(probs[i], classes);
         float prob = probs[i][class];
-        if(prob > thresh){            
-            printf("%s: %.2f\n", names[class], prob);            
+        if(prob > 0.2){                                   
             box b = boxes[i];
 
             int left  = (b.x-b.w/2.)*im.w;
@@ -532,10 +536,12 @@ void write_detections(char *fname, image im, int num, float thresh, box *boxes, 
             if(right > im.w-1) right = im.w-1;
             if(top < 0) top = 0;
             if(bot > im.h-1) bot = im.h-1;
-            
-            //printf("/home/ar600/darknet/results.txt","%s;%s;%.2f;%d;%d;%d;%d\n;", names[class], prob, left, top, right, bot);
+            	            
+            printf("%s;%s;%.2f;%d;%d;%d;%d \n", fname, names[class], prob, left, top, right, bot); 
+            fprintf(pFile, "%s\t%s\t%.2f\t%d\t%d\t%d\t%d\n", fname, names[class], prob, left, top, right, bot); 	               
         }
     }
+    fclose(pFile); 
 }
 
 void run_yolo(int argc, char **argv)
@@ -559,7 +565,7 @@ void run_yolo(int argc, char **argv)
     char *filename = (argc > 5) ? argv[5]: 0;
     char *outdir = (argc > 6) ? argv[6]: 0;
     if(0==strcmp(argv[2], "test")) test_yolo(cfg, weights, filename, thresh);
-    else if(0==strcmp(argv[2], "detection")) launch_detector_yolo(cfg, weights, filename, outdir, 0.2);
+    else if(0==strcmp(argv[2], "detection")) launch_detector_yolo(cfg, weights, filename, outdir, thresh);
     else if(0==strcmp(argv[2], "train")) train_yolo(cfg, weights);
     else if(0==strcmp(argv[2], "valid")) validate_yolo(cfg, weights);
     else if(0==strcmp(argv[2], "recall")) validate_yolo_recall(cfg, weights);
